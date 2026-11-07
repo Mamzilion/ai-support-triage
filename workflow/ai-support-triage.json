@@ -1,0 +1,362 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "cab8ec85-7544-4308-b889-b68849e5b3fb",
+      "name": "Email Trigger (IMAP)",
+      "credentials": {
+        "imap": {
+          "id": "jQdcMfMUISvsxmbs",
+          "name": "Support IMAP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6d81ee6f-f12c-44a6-8c6e-b590d9724fb2",
+              "name": "base_url",
+              "value": "https://generativelanguage.googleapis.com/v1beta/openai/",
+              "type": "string"
+            },
+            {
+              "id": "7ecbfbe0-62a7-42c2-bd72-26beb86bf317",
+              "name": "model",
+              "value": "gemini-3.5-flash-lite",
+              "type": "string"
+            },
+            {
+              "id": "3654cd46-1cbe-4122-aabf-b90b4f00e6a1",
+              "name": "company_name",
+              "value": "Liontech",
+              "type": "string"
+            },
+            {
+              "id": "890856c6-b78a-45ad-8715-7d27864b1bd9",
+              "name": "support_email",
+              "value": "support@example.com",
+              "type": "string"
+            },
+            {
+              "id": "abe839d1-665c-4998-833c-f25aee66e34b",
+              "name": "team_email",
+              "value": "team@example.com",
+              "type": "string"
+            },
+            {
+              "id": "def58bf5-4e78-4def-b40b-fe2ff69201d9",
+              "name": "test_mode",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "e08519ec-1cb9-4567-b81a-c6bf7fb494c9",
+              "name": "test_recipient",
+              "value": "team@example.com",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        0
+      ],
+      "id": "f61411b7-df3b-4756-97eb-ad41ea8f8aa8",
+      "name": "Config"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.base_url }}chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: $json.model,\n  temperature: 0.1,\n  messages: [\n    {\n      role: \"system\",\n      content: \"You are the support triage assistant of \" + $json.company_name + \". Analyse the customer email and answer ONLY with valid JSON, no markdown, in this exact format: {\\\"is_automated\\\": true or false, \\\"category\\\": \\\"question\\\" or \\\"technical\\\" or \\\"billing\\\" or \\\"complaint\\\" or \\\"other\\\", \\\"urgency\\\": \\\"low\\\" or \\\"medium\\\" or \\\"high\\\", \\\"sentiment\\\": \\\"calm\\\" or \\\"frustrated\\\" or \\\"angry\\\", \\\"language\\\": \\\"two-letter code\\\", \\\"summary\\\": \\\"one sentence for the support team\\\", \\\"needs_human\\\": true or false, \\\"reply_subject\\\": \\\"...\\\", \\\"reply_body\\\": \\\"polite, helpful reply in the customer's language, signed The \" + $json.company_name + \" team\\\"}. Rules: is_automated = true for newsletters, notifications, promotions or no-reply senders. needs_human = true if urgency is high, OR sentiment is angry, OR category is billing or complaint, OR the answer requires access to the customer's account. Never invent facts, prices or policies: if you don't know, say the team will get back to them.\"\n    },\n    {\n      role: \"user\",\n      content: JSON.stringify({\n        from: $json.from,\n        subject: $json.subject,\n        body: ($json.textPlain || \"\").slice(0, 4000)\n      })\n    }\n  ]\n}) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        448,
+        0
+      ],
+      "id": "4837ac2a-2fe3-46a0-97ac-1baf4db3c731",
+      "name": "AI - Analyse email",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "kNVrQoM33tetEoxx",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// 1. Récupérer le texte renvoyé par l'IA\nconst raw = $json.choices[0].message.content;\n\n// 2. Nettoyer : certains modèles entourent le JSON de ```json ... ```\nconst cleaned = raw.replace(/```json|```/g, '').trim();\n\n// 3. Convertir le texte en objet JavaScript\nlet ai;\ntry {\n  ai = JSON.parse(cleaned);\n} catch (error) {\n  throw new Error('AI answer is not valid JSON: ' + raw);\n}\n\n// 4. Récupérer les données des nœuds précédents, par leur nom\nconst email = $('Email Trigger (IMAP)').item.json;\nconst config = $('Config').item.json;\n\n// 5. Extraire l'adresse e-mail de \"Nom <adresse@domaine.com>\"\nconst match = (email.from || '').match(/<([^>]+)>/);\nconst senderEmail = match ? match[1] : (email.from || '').trim();\n\n// 6. Mode test : en test, toutes les réponses partent vers notre adresse\nconst replyTo = config.test_mode ? config.test_recipient : senderEmail;\n\n// 7. Tout regrouper dans un objet propre\nreturn {\n  sender_email: senderEmail,\n  reply_to: replyTo,\n  test_mode: config.test_mode,\n  original_subject: email.subject,\n  original_body: (email.textPlain || '').slice(0, 2000),\n  is_automated: ai.is_automated,\n  category: ai.category,\n  urgency: ai.urgency,\n  sentiment: ai.sentiment,\n  language: ai.language,\n  summary: ai.summary,\n  needs_human: ai.needs_human,\n  reply_subject: ai.reply_subject,\n  reply_body: ai.reply_body,\n  support_email: config.support_email,\n  team_email: config.team_email,\n  company_name: config.company_name\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ],
+      "id": "5c87a90e-cbdf-4ed4-a9d8-4f6c9a928037",
+      "name": "Parse AI answer"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 4
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.is_automated }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    },
+                    "id": "eeb769cb-abe6-4598-88cf-e3a698addf84"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Ignore"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 4
+                },
+                "conditions": [
+                  {
+                    "id": "c17e9fc8-77a5-47c4-b797-176e40dc8db8",
+                    "leftValue": "={{ $json.needs_human }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Human"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "Auto reply"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.5,
+      "position": [
+        896,
+        0
+      ],
+      "id": "ef85e417-3b68-46bc-a527-8966616cc72b",
+      "name": "Route email"
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.company_name }}suport",
+        "toEmail": "={{ $json.reply_to }}",
+        "subject": "={{ $json.test_mode ? '[TEST → ' + $json.sender_email + '] ' : '' }}{{ $json.reply_subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.reply_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1088,
+        96
+      ],
+      "id": "6ed81ff2-3c8a-4c9a-b1ca-dc30835025b0",
+      "name": "Auto reply to customer",
+      "webhookId": "06bb3bfd-e5d2-4698-b744-0e7f62293641",
+      "credentials": {
+        "smtp": {
+          "id": "vGxmu1MwxNlgBxow",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "=Support Bot <{{ $json.support_email }}>",
+        "toEmail": "={{ $json.team_email }}",
+        "subject": "=[{{ $json.urgency.toUpperCase() }}] {{ $json.category }} – {{ $json.original_subject }}",
+        "emailFormat": "text",
+        "text": "=A customer email needs a human.\n\nFrom: {{ $json.sender_email }}\nCategory: {{ $json.category }}\nUrgency: {{ $json.urgency }}\nSentiment: {{ $json.sentiment }}\nLanguage: {{ $json.language }}\n\nAI summary:\n{{ $json.summary }}\n\n--- Original message ---\nSubject: {{ $json.original_subject }}\n\n{{ $json.original_body }}\n\n--- Suggested reply (review before sending) ---\nSubject: {{ $json.reply_subject }}\n\n{{ $json.reply_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1056,
+        -192
+      ],
+      "id": "f6e6907d-2445-4a3e-a538-945b9a51cf88",
+      "name": "Alert team",
+      "webhookId": "4ad32419-7b43-4aa6-985a-55a0a5de5224",
+      "credentials": {
+        "smtp": {
+          "id": "vGxmu1MwxNlgBxow",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.company_name }}Support<{{ $json.support_email }}>",
+        "toEmail": "={{ $json.reply_to }}",
+        "subject": "={{ $json.test_mode ? '[TEST → ' + $json.sender_email + '] ' : '' }}{{ $json.language === 'fr' ? 'Nous avons bien reçu votre message' : 'We received your message' }}",
+        "emailFormat": "text",
+        "text": "={{ $json.language === 'fr'\n  ? \"Bonjour,\\n\\nNous avons bien reçu votre message concernant « \" + $json.original_subject + \" ».\\nUn membre de notre équipe s'en occupe personnellement et vous répondra dans les plus brefs délais.\\n\\nCordialement,\\nL'équipe \" + $json.company_name\n  : \"Hello,\\n\\nWe have received your message about \\\"\" + $json.original_subject + \"\\\".\\nA member of our team is personally looking into it and will get back to you shortly.\\n\\nBest regards,\\nThe \" + $json.company_name + \" team\" }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1008,
+        304
+      ],
+      "id": "b69bff46-49c9-4e1c-974b-53011887dcb4",
+      "name": "Acknowledge customer",
+      "webhookId": "c4ac1760-d39b-4634-9659-f4c6f93c413f",
+      "credentials": {
+        "smtp": {
+          "id": "vGxmu1MwxNlgBxow",
+          "name": "SMTP account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Email Trigger (IMAP)": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "AI - Analyse email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI - Analyse email": {
+      "main": [
+        [
+          {
+            "node": "Parse AI answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI answer": {
+      "main": [
+        [
+          {
+            "node": "Route email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route email": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Alert team",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Acknowledge customer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Auto reply to customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "c5ce0d27-a399-4dad-b9c8-b8274b8a66c6",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "55c0dac8c354ce4a3e4e8b47766528a105c6bbfdfc5381d506d6d73f91937f8e"
+  },
+  "nodeGroups": [],
+  "id": "7QtviHCHrUh7cG9t",
+  "tags": []
+}
